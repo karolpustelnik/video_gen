@@ -282,7 +282,7 @@ class VideoFramesFolderDataset(Dataset):
 
         listdir_full_paths = lambda d: sorted([os.path.join(d, x) for x in os.listdir(d)])
         name = os.path.splitext(os.path.basename(self._path))[0]
-
+        print(self._path)
         if os.path.isdir(self._path):
             self._type = 'dir'
             # We assume that the depth is 2

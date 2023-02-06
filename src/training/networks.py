@@ -432,7 +432,7 @@ class DiscriminatorBlock(torch.nn.Module):
         self.use_fp16 = use_fp16
         self.channels_last = (use_fp16 and fp16_channels_last)
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
-
+        self.n_segment = self.cfg.sampling.num_frames_per_video 
         self.num_layers = 0
         def trainable_gen():
             while True:
@@ -456,8 +456,32 @@ class DiscriminatorBlock(torch.nn.Module):
         if architecture == 'resnet':
             self.skip = Conv2dLayer(conv0_in_channels, out_channels, kernel_size=1, bias=False, down=2,
                 trainable=next(trainable_iter), resample_filter=resample_filter, channels_last=self.channels_last)
+            
+    ### added temporal shift module     
+    @staticmethod  
+    def shift(x, n_segment, fold_div=8, inplace=False):
+        nt, c, h, w = x.size()
+        n_batch = nt // n_segment
+        x = x.view(n_batch, n_segment, c, h, w)
+        #print(f'x shape: {x.shape}')
+        fold = c // fold_div
+        if inplace:
+            # Due to some out of order error when performing parallel computing. 
+            # May need to write a CUDA kernel.
+            raise NotImplementedError  
+            # out = InplaceShift.apply(x, fold)
+        else:
+            out = torch.zeros_like(x)
+            out[:, :-1, :fold] = x[:, 1:, :fold]  # shift left
+            out[:, 1:, fold: 2 * fold] = x[:, :-1, fold: 2 * fold]  # shift right
+            out[:, :, 2 * fold:] = x[:, :, 2 * fold:]  # not shift
 
+        return out.view(nt, c, h, w)
+    
+    
     def forward(self, x, img, force_fp32=False):
+        #print('Shape of x in DiscriminatorBlock: ', x.shape) if x is not None else print('x is None')
+        #print('Shape of img in DiscriminatorBlock: ', img.shape) if img is not None else print('img is None')
         dtype = torch.float16 if self.use_fp16 and not force_fp32 else torch.float32
         memory_format = torch.channels_last if self.channels_last and not force_fp32 else torch.contiguous_format
 
@@ -476,11 +500,17 @@ class DiscriminatorBlock(torch.nn.Module):
 
         # Main layers.
         if self.architecture == 'resnet':
+            #print('x in resnet: ', x.shape)
             y = self.skip(x, gain=np.sqrt(0.5))
+            #print(x)
+            if self.resolution > 16:
+                x = self.shift(x, self.n_segment,  inplace=False)
             x = self.conv0(x)
             x = self.conv1(x, gain=np.sqrt(0.5))
             x = y.add_(x)
         else:
+            if self.resolution > 16:
+                x = self.shift(x, self.n_segment, inplace=False)
             x = self.conv0(x)
             x = self.conv1(x)
 
@@ -642,6 +672,7 @@ class Discriminator(torch.nn.Module):
         self.b4 = DiscriminatorEpilogue(channels_dict[4], cmap_dim=cmap_dim, resolution=4, cfg=self.cfg, **epilogue_kwargs, **common_kwargs)
 
     def forward(self, img, c, t, **block_kwargs):
+        print("Discriminator forward, img shape: ", img.shape)
         assert len(img) == t.shape[0] * t.shape[1], f"Wrong shape: {img.shape}, {t.shape}"
         assert t.ndim == 2, f"Wrong shape: {t.shape}"
 
