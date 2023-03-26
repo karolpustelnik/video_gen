@@ -401,7 +401,40 @@ class Generator(torch.nn.Module):
         return img
 
 #----------------------------------------------------------------------------
+class Self_Attn(torch.nn.Module):
+    """ Self attention Layer"""
+    def __init__(self,in_dim):
+        super(Self_Attn,self).__init__()
+        self.chanel_in = in_dim
+        
+        self.query_conv = torch.nn.Conv2d(in_channels = in_dim , out_channels = in_dim//8 , kernel_size= 1)
+        self.key_conv = torch.nn.Conv2d(in_channels = in_dim , out_channels = in_dim//8 , kernel_size= 1)
+        self.value_conv = torch.nn.Conv2d(in_channels = in_dim , out_channels = in_dim , kernel_size= 1)
+        #self.gamma = torch.nn.Parameter(torch.zeros(1))
 
+        self.softmax  = torch.nn.Softmax(dim=-1) #
+    def forward(self,x):
+        """
+            inputs :
+                x : input feature maps( B X C X W X H)
+            returns :
+                out : self attention value + input feature 
+                attention: B X N X N (N is Width*Height)
+        """
+        m_batchsize,C,width ,height = x.size()
+        proj_query  = self.query_conv(x).view(m_batchsize,-1,width*height).permute(0,2,1) # B X CX(N)
+        proj_key =  self.key_conv(x).view(m_batchsize,-1,width*height) # B X C x (*W*H)
+        energy =  torch.bmm(proj_query,proj_key) # transpose check
+        attention = self.softmax(energy) # BX (N) X (N) 
+        proj_value = self.value_conv(x).view(m_batchsize,-1,width*height) # B X C X N
+
+        out = torch.bmm(proj_value,attention.permute(0,2,1) )
+        out = out.view(m_batchsize,C,width,height)
+        
+        #out = self.gamma*out + x
+        
+        return out
+    
 @persistence.persistent_class
 class DiscriminatorBlock(torch.nn.Module):
     def __init__(self,
@@ -422,18 +455,28 @@ class DiscriminatorBlock(torch.nn.Module):
     ):
         assert architecture in ['orig', 'skip', 'resnet']
         super().__init__()
-
         self.cfg = cfg
         self.in_channels = in_channels
         self.resolution = resolution
+        self.use_fp16 = use_fp16
+        # if self.resolution > 16 and self.in_channels !=0 :
+        #     if self.use_fp16:
+        #         self.attention = Self_Attn(in_dim = in_channels).to(torch.float16)
+        #     else: 
+        #         self.attention = Self_Attn(in_dim = in_channels)
+        
         self.img_channels = img_channels
         self.first_layer_idx = first_layer_idx
         self.architecture = architecture
-        self.use_fp16 = use_fp16
         self.channels_last = (use_fp16 and fp16_channels_last)
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         self.n_segment = self.cfg.sampling.num_frames_per_video 
         self.num_layers = 0
+        # if self.resolution > 16 and self.in_channels !=0: 
+        #     if self.use_fp16:
+        #         self.gamma = torch.nn.Parameter(torch.zeros(1)).to(torch.float16)
+        #     else: 
+        #         self.gamma = torch.nn.Parameter(torch.zeros(1))
         def trainable_gen():
             while True:
                 layer_idx = self.first_layer_idx + self.num_layers
@@ -478,10 +521,7 @@ class DiscriminatorBlock(torch.nn.Module):
 
         return out.view(nt, c, h, w)
     
-    
     def forward(self, x, img, force_fp32=False):
-        #print('Shape of x in DiscriminatorBlock: ', x.shape) if x is not None else print('x is None')
-        #print('Shape of img in DiscriminatorBlock: ', img.shape) if img is not None else print('img is None')
         dtype = torch.float16 if self.use_fp16 and not force_fp32 else torch.float32
         memory_format = torch.channels_last if self.channels_last and not force_fp32 else torch.contiguous_format
 
@@ -500,22 +540,65 @@ class DiscriminatorBlock(torch.nn.Module):
 
         # Main layers.
         if self.architecture == 'resnet':
-            #print('x in resnet: ', x.shape)
             y = self.skip(x, gain=np.sqrt(0.5))
-            #print(x)
-            if self.resolution > 16:
-                x = self.shift(x, self.n_segment,  inplace=False)
             x = self.conv0(x)
             x = self.conv1(x, gain=np.sqrt(0.5))
             x = y.add_(x)
         else:
-            if self.resolution > 16:
-                x = self.shift(x, self.n_segment, inplace=False)
             x = self.conv0(x)
             x = self.conv1(x)
 
         assert x.dtype == dtype
         return x, img
+    
+    # def forward(self, x, img, force_fp32=False):
+    #     #print('Shape of x in DiscriminatorBlock: ', x.shape) if x is not None else print('x is None')
+    #     #print('Shape of img in DiscriminatorBlock: ', img.shape) if img is not None else print('img is None')
+    #     dtype = torch.float16 if self.use_fp16 and not force_fp32 else torch.float32
+    #     memory_format = torch.channels_last if self.channels_last and not force_fp32 else torch.contiguous_format
+
+    #     # Input.
+    #     if x is not None:
+    #         misc.assert_shape(x, [None, self.in_channels, self.resolution, self.resolution])
+    #         x = x.to(dtype=dtype, memory_format=memory_format)
+
+    #     # FromRGB.
+    #     if self.in_channels == 0 or self.architecture == 'skip':
+    #         misc.assert_shape(img, [None, self.img_channels, self.resolution, self.resolution])
+    #         img = img.to(dtype=dtype, memory_format=memory_format)
+    #         y = self.fromrgb(img)
+    #         x = x + y if x is not None else y
+    #         img = upfirdn2d.downsample2d(img, self.resample_filter) if self.architecture == 'skip' else None
+
+    #     # Main layers.
+    #     if self.architecture == 'resnet':
+    #         print('Using resnet skip conn')
+    #         #print('x in resnet: ', x.shape)
+    #         y = self.skip(x, gain=np.sqrt(0.5))
+    #         #print(x)
+    #         #if self.resolution > 16:
+    #         #    x = self.shift(x, self.n_segment,  inplace=False)
+    #             #print('shape of x before attention', x.shape)
+    #         #if self.resolution > 16 and self.in_channels !=0: 
+    #         #    x = self.attention(x)
+    #         x = self.conv0(x)
+    #         x = self.conv1(x, gain=np.sqrt(0.5))
+    #         if self.resolution > 16 and self.in_channels !=0:
+    #             x = y + self.gamma*x
+    #         else:
+    #             x = y.add_(x)
+    #     else:
+    #         print('Not using resnet skipp conn')
+    #         if self.resolution > 16:
+    #             x = self.shift(x, self.n_segment, inplace=False)
+    #         if self.resolution == 8:
+    #             print('shape of x before attention', x.shape)
+    #             x = self.attention(x)
+    #         x = self.conv0(x)
+    #         x = self.conv1(x)
+
+    #     assert x.dtype == dtype
+    #     return x, img
 
 #----------------------------------------------------------------------------
 

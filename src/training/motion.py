@@ -39,6 +39,7 @@ class MotionMappingNetwork(torch.nn.Module):
                 w_avg_beta=None,
                 cfg=self.cfg,
             )
+            self.time_encoder = None
 
         if self.cfg.motion.gen_strategy == 'autoregressive':
             self.rnn = nn.LSTM(

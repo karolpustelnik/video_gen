@@ -69,6 +69,7 @@ class Discriminator(nn.Module):
         # Preparing input for the video discriminator
         videos = img.view(batch_size, num_frames_per_video, *img.shape[1:]) # [batch_size, t, c, h, w]
         videos = videos.permute(0, 2, 1, 3, 4).contiguous() # [batch_size, c, t, h, w]
+        print(videos.shape)
         video_logits = self.video_discr(videos) # (num_subdiscrs, num_layers, [batch_size, 1, out_t, out_h, out_w])
 
         # We return a tuple for backward compatibility

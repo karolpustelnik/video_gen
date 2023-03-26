@@ -1,13 +1,13 @@
 defaults:
   - model/base.yaml
-  - model: stylegan-v
+  - model: mocogan
 
   # Import dataset common and overwrite it with the custom one
   - dataset/base.yaml
   - dataset: ffs
 
   - sampling/base.yaml
-  - sampling: random
+  - sampling: uniform
 
   - env/base.yaml
   - env: local

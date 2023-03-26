@@ -415,7 +415,7 @@ def random_frame_sampling(cfg: Dict, total_video_len: int, use_fractional_t: boo
 def uniform_frame_sampling(cfg: Dict, total_video_len: int, use_fractional_t: bool=False) -> np.ndarray:
     # Step 1: Select the distance between frames
     if type(cfg.get('dists_between_frames')) in (list, tuple):
-        valid_dists = [d for d in cfg['dists_between_frames'] if d <= ['max_dist_between_frames']]
+        valid_dists = [d for d in cfg['dists_between_frames'] if d <= cfg['max_dist_between_frames']]
         valid_dists = [d for d in valid_dists if (d * cfg['num_frames_per_video'] - d + 1) <= total_video_len]
         d = random.choice(valid_dists)
     else:

@@ -359,10 +359,6 @@ def training_loop(
         # Fetch training data.
         with torch.autograd.profiler.record_function('data_fetch'):
             batch = next(training_set_iterator)
-            print(f'shape of img in batch: {batch["image"].shape}')
-            print(f'shape of label in batch: {batch["label"].shape}')
-            print(f'shape of times in batch: {batch["times"].shape}')
-            print(f'shape of video_len in batch: {batch["video_len"].shape}')
             print('---------------------Next batch!-----------------------')
             phase_real_img, phase_real_c, phase_real_t, phase_real_l = batch['image'], batch['label'], batch['times'], batch['video_len']
             phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
