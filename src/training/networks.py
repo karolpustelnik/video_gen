@@ -197,7 +197,13 @@ class SynthesisBlock(torch.nn.Module):
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         self.num_conv = 0
         self.num_torgb = 0
-
+        # if (self.resolution == 8 or self.resolution == 16) and self.in_channels !=0 :
+        #     if self.use_fp16:
+        #         self.attention = Self_Attn(in_dim = in_channels).to(torch.float16)
+        #         self.gamma = torch.nn.Parameter(torch.zeros(1)).to(torch.float16)
+        #     else: 
+        #         self.attention = Self_Attn(in_dim = in_channels)
+        #         self.gamma = torch.nn.Parameter(torch.zeros(1))
         if in_channels == 0:
             self.input = GenInput(self.cfg, out_channels, motion_v_dim=motion_v_dim)
             conv1_in_channels = self.input.total_dim
@@ -243,11 +249,15 @@ class SynthesisBlock(torch.nn.Module):
             x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
         elif self.architecture == 'resnet':
             y = self.skip(x, gain=np.sqrt(0.5))
+            # if self.resolution == 8 or self.resolution == 16:
+            #     x = self.gamma*self.attention(x) + x
             x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
             x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, gain=np.sqrt(0.5), **layer_kwargs)
             x = y.add_(x)
         else:
             conv0_w = next(w_iter)
+            # if self.resolution == 8 or self.resolution == 16:
+            #     x = self.gamma*self.attention(x) + x
             x = self.conv0(x, conv0_w, fused_modconv=fused_modconv, **layer_kwargs)
             x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
 
@@ -459,11 +469,13 @@ class DiscriminatorBlock(torch.nn.Module):
         self.in_channels = in_channels
         self.resolution = resolution
         self.use_fp16 = use_fp16
-        # if self.resolution > 16 and self.in_channels !=0 :
+        # if (self.resolution == 8 or self.resolution == 16) and self.in_channels !=0 :
         #     if self.use_fp16:
         #         self.attention = Self_Attn(in_dim = in_channels).to(torch.float16)
+        #         self.gamma = torch.nn.Parameter(torch.zeros(1)).to(torch.float16)
         #     else: 
         #         self.attention = Self_Attn(in_dim = in_channels)
+        #         self.gamma = torch.nn.Parameter(torch.zeros(1))
         
         self.img_channels = img_channels
         self.first_layer_idx = first_layer_idx
@@ -472,11 +484,6 @@ class DiscriminatorBlock(torch.nn.Module):
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         self.n_segment = self.cfg.sampling.num_frames_per_video 
         self.num_layers = 0
-        # if self.resolution > 16 and self.in_channels !=0: 
-        #     if self.use_fp16:
-        #         self.gamma = torch.nn.Parameter(torch.zeros(1)).to(torch.float16)
-        #     else: 
-        #         self.gamma = torch.nn.Parameter(torch.zeros(1))
         def trainable_gen():
             while True:
                 layer_idx = self.first_layer_idx + self.num_layers
@@ -506,7 +513,6 @@ class DiscriminatorBlock(torch.nn.Module):
         nt, c, h, w = x.size()
         n_batch = nt // n_segment
         x = x.view(n_batch, n_segment, c, h, w)
-        #print(f'x shape: {x.shape}')
         fold = c // fold_div
         if inplace:
             # Due to some out of order error when performing parallel computing. 
@@ -541,65 +547,26 @@ class DiscriminatorBlock(torch.nn.Module):
         # Main layers.
         if self.architecture == 'resnet':
             y = self.skip(x, gain=np.sqrt(0.5))
+            if self.resolution > 16:
+                x = self.shift(x, self.n_segment,  inplace=False)
+            # if self.resolution == 8 or self.resolution == 16:
+            #     x = self.gamma*self.attention(x) + x
             x = self.conv0(x)
             x = self.conv1(x, gain=np.sqrt(0.5))
             x = y.add_(x)
         else:
+            if self.resolution > 16:
+                x = self.shift(x, self.n_segment, inplace=False)
+                
+            # if self.resolution == 8 or self.resolution == 16:
+            #     x = self.gamma*self.attention(x) + x
             x = self.conv0(x)
             x = self.conv1(x)
 
         assert x.dtype == dtype
         return x, img
     
-    # def forward(self, x, img, force_fp32=False):
-    #     #print('Shape of x in DiscriminatorBlock: ', x.shape) if x is not None else print('x is None')
-    #     #print('Shape of img in DiscriminatorBlock: ', img.shape) if img is not None else print('img is None')
-    #     dtype = torch.float16 if self.use_fp16 and not force_fp32 else torch.float32
-    #     memory_format = torch.channels_last if self.channels_last and not force_fp32 else torch.contiguous_format
-
-    #     # Input.
-    #     if x is not None:
-    #         misc.assert_shape(x, [None, self.in_channels, self.resolution, self.resolution])
-    #         x = x.to(dtype=dtype, memory_format=memory_format)
-
-    #     # FromRGB.
-    #     if self.in_channels == 0 or self.architecture == 'skip':
-    #         misc.assert_shape(img, [None, self.img_channels, self.resolution, self.resolution])
-    #         img = img.to(dtype=dtype, memory_format=memory_format)
-    #         y = self.fromrgb(img)
-    #         x = x + y if x is not None else y
-    #         img = upfirdn2d.downsample2d(img, self.resample_filter) if self.architecture == 'skip' else None
-
-    #     # Main layers.
-    #     if self.architecture == 'resnet':
-    #         print('Using resnet skip conn')
-    #         #print('x in resnet: ', x.shape)
-    #         y = self.skip(x, gain=np.sqrt(0.5))
-    #         #print(x)
-    #         #if self.resolution > 16:
-    #         #    x = self.shift(x, self.n_segment,  inplace=False)
-    #             #print('shape of x before attention', x.shape)
-    #         #if self.resolution > 16 and self.in_channels !=0: 
-    #         #    x = self.attention(x)
-    #         x = self.conv0(x)
-    #         x = self.conv1(x, gain=np.sqrt(0.5))
-    #         if self.resolution > 16 and self.in_channels !=0:
-    #             x = y + self.gamma*x
-    #         else:
-    #             x = y.add_(x)
-    #     else:
-    #         print('Not using resnet skipp conn')
-    #         if self.resolution > 16:
-    #             x = self.shift(x, self.n_segment, inplace=False)
-    #         if self.resolution == 8:
-    #             print('shape of x before attention', x.shape)
-    #             x = self.attention(x)
-    #         x = self.conv0(x)
-    #         x = self.conv1(x)
-
-    #     assert x.dtype == dtype
-    #     return x, img
-
+ 
 #----------------------------------------------------------------------------
 
 @persistence.persistent_class
@@ -755,7 +722,6 @@ class Discriminator(torch.nn.Module):
         self.b4 = DiscriminatorEpilogue(channels_dict[4], cmap_dim=cmap_dim, resolution=4, cfg=self.cfg, **epilogue_kwargs, **common_kwargs)
 
     def forward(self, img, c, t, **block_kwargs):
-        print("Discriminator forward, img shape: ", img.shape)
         assert len(img) == t.shape[0] * t.shape[1], f"Wrong shape: {img.shape}, {t.shape}"
         assert t.ndim == 2, f"Wrong shape: {t.shape}"
 

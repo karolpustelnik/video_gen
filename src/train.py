@@ -186,7 +186,9 @@ def process_hyperparams(cfg: DictConfig):
         args.D_kwargs.conv_clamp = None
 
     G_lr = cfg.model.optim.generator.get('lr', spec.lrate)
+    print('Generator learning rate', G_lr)
     D_lr = cfg.model.optim.discriminator.get('lr', spec.lrate)
+    print('Discriminator learning rate', D_lr)
     G_betas = cfg.model.optim.generator.get('betas', [0, 0.99])
     D_betas = cfg.model.optim.discriminator.get('betas', [0, 0.99])
     args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=G_lr, betas=G_betas, eps=1e-8)
